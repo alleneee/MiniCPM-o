@@ -2,6 +2,9 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
+#
+# 重采样器模块
+# 用于处理视觉特征并将其与语言特征对齐
 
 from collections import OrderedDict
 import math
@@ -21,6 +24,16 @@ from torchvision.transforms import InterpolationMode
 
 
 def get_abs_pos(abs_pos, tgt_size):
+    """
+    获取绝对位置编码，根据目标大小调整
+    
+    参数:
+        abs_pos: 原始位置编码，形状为 (L, C)
+        tgt_size: 目标大小 M
+        
+    返回:
+        调整后的位置编码，形状为 (M, C)
+    """
     # abs_pos: L, C
     # tgt_size: M
     # return: M, C
@@ -42,13 +55,20 @@ def get_abs_pos(abs_pos, tgt_size):
 # https://github.com/facebookresearch/mae/blob/efb2a8062c206524e35e47d04501ed4f544c0ae8/util/pos_embed.py#L20
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
     """
-    grid_size: int of the grid height and width
-    return:
-    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    获取二维正弦余弦位置编码
+    
+    参数:
+        embed_dim: 嵌入维度
+        grid_size: 网格的高度和宽度
+        cls_token: 是否包含类别标记
+        
+    返回:
+        pos_embed: 形状为[grid_size*grid_size, embed_dim]的位置编码
+                  如果cls_token为True，则形状为[1+grid_size*grid_size, embed_dim]
     """
     grid_h = np.arange(grid_size, dtype=np.float32)
     grid_w = np.arange(grid_size, dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+    grid = np.meshgrid(grid_w, grid_h)  # 注意w先行
     grid = np.stack(grid, axis=0)
 
     grid = grid.reshape([2, 1, grid_size, grid_size])
@@ -60,9 +80,19 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
 
 
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
+    """
+    从网格获取二维正弦余弦位置编码
+    
+    参数:
+        embed_dim: 嵌入维度
+        grid: 位置网格
+        
+    返回:
+        二维位置编码
+    """
     assert embed_dim % 2 == 0
 
-    # use half of dimensions to encode grid_h
+    # 使用一半维度编码grid_h
     emb_h = get_1d_sincos_pos_embed_from_grid(
         embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(
@@ -74,9 +104,14 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
-    embed_dim: output dimension for each position
-    pos: a list of positions to be encoded: size (M,)
-    out: (M, D)
+    从网格获取一维正弦余弦位置编码
+    
+    参数:
+        embed_dim: 每个位置的输出维度
+        pos: 要编码的位置列表，大小为(M,)
+        
+    返回:
+        形状为(M, D)的位置编码
     """
     assert embed_dim % 2 == 0
     omega = np.arange(embed_dim // 2, dtype=np.float32)
@@ -84,7 +119,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     omega = 1. / 10000 ** omega  # (D/2,)
 
     pos = pos.reshape(-1)  # (M,)
-    out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+    out = np.einsum('m,d->md', pos, omega)  # (M, D/2)，外积
 
     emb_sin = np.sin(out)  # (M, D/2)
     emb_cos = np.cos(out)  # (M, D/2)
@@ -95,10 +130,11 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
 class Resampler(nn.Module):
     """
-    A 2D perceiver-resampler network with one cross attention layers by
-        (grid_size**2) learnable queries and 2d sincos pos_emb
-    Outputs:
-        A tensor with the shape of (grid_size**2, embed_dim)
+    二维感知重采样网络，具有一个交叉注意力层
+    使用(grid_size**2)个可学习查询和二维正弦余弦位置编码
+    
+    输出:
+        形状为(grid_size**2, embed_dim)的张量
     """
 
     def __init__(
@@ -109,24 +145,38 @@ class Resampler(nn.Module):
             kv_dim=None,
             norm_layer=partial(nn.LayerNorm, eps=1e-6)
     ):
+        """
+        初始化重采样器
+        
+        参数:
+            grid_size: 网格大小
+            embed_dim: 嵌入维度
+            num_heads: 注意力头数
+            kv_dim: 键值对维度，默认与embed_dim相同
+            norm_layer: 归一化层，默认为LayerNorm
+        """
         super().__init__()
         self.num_queries = grid_size ** 2
         self.embed_dim = embed_dim
         self.num_heads = num_heads
 
+        # 初始化位置编码，不参与梯度更新
         self.pos_embed = nn.Parameter(
             torch.from_numpy(get_2d_sincos_pos_embed(
                 embed_dim, grid_size)).float()
         ).requires_grad_(False)
 
+        # 初始化可学习查询
         self.query = nn.Parameter(torch.zeros(self.num_queries, embed_dim))
         trunc_normal_(self.query, std=.02)
 
+        # 键值对投影层
         if kv_dim is not None and kv_dim != embed_dim:
             self.kv_proj = nn.Linear(kv_dim, embed_dim, bias=False)
         else:
             self.kv_proj = nn.Identity()
 
+        # 多头注意力层和归一化层
         self.attn = nn.MultiheadAttention(embed_dim, num_heads)
         self.ln_q = norm_layer(embed_dim)
         self.ln_kv = norm_layer(embed_dim)
@@ -138,6 +188,12 @@ class Resampler(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
+        """
+        初始化模型权重
+        
+        参数:
+            m: 模型层
+        """
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
@@ -147,15 +203,27 @@ class Resampler(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x, attn_mask=None):
-
+        """
+        前向传播
+        
+        参数:
+            x: 输入特征
+            attn_mask: 注意力掩码，默认为None
+            
+        返回:
+            重采样后的特征
+        """
+        # 获取适应当前输入大小的位置编码
         pos_embed = get_abs_pos(self.pos_embed, x.size(1))
 
+        # 投影和归一化
         x = self.kv_proj(x)
         x = self.ln_kv(x).permute(1, 0, 2)
 
         N = x.shape[1]
         q = self.ln_q(self.query)
-        # print((self._repeat(q, N) + self.pos_embed.unsqueeze(1)).dtype, (x + pos_embed.unsqueeze(1)).dtype, x.dtype)
+        
+        # 执行注意力计算
         out = self.attn(
             self._repeat(q, N) + self.pos_embed.unsqueeze(1),
             x + pos_embed.unsqueeze(1),
@@ -163,9 +231,20 @@ class Resampler(nn.Module):
             attn_mask=attn_mask)[0]
         x = out.permute(1, 0, 2)
 
+        # 最终处理
         x = self.ln_post(x)
         x = x @ self.proj
         return x
 
     def _repeat(self, query, N: int):
+        """
+        重复查询向量
+        
+        参数:
+            query: 查询向量
+            N: 重复次数
+            
+        返回:
+            重复后的查询向量
+        """
         return query.unsqueeze(1).repeat(1, N, 1)

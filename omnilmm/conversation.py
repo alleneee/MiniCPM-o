@@ -1,29 +1,49 @@
+# 会话管理模块
+# 用于处理多轮对话的结构和格式化
+
 import dataclasses
 from enum import auto, Enum
 from typing import List, Tuple
 
 
 class SeparatorStyle(Enum):
-    """Different separator style."""
+    """不同的分隔符样式"""
+    # 单一分隔符样式
     SINGLE = auto()
+    # 双分隔符样式
     TWO = auto()
 
 
 @dataclasses.dataclass
 class Conversation:
-    """A class that keeps all conversation history."""
+    """管理所有对话历史的类"""
+    # 系统提示信息
     system: str
+    # 对话角色列表
     roles: List[str]
+    # 对话消息列表，每个元素为 [角色, 消息内容]
     messages: List[List[str]]
+    # 消息偏移量，用于确定对话的起始位置
     offset: int
+    # 分隔符风格，默认为单一分隔符
     sep_style: SeparatorStyle = SeparatorStyle.SINGLE
+    # 主分隔符
     sep: str = "###"
+    # 第二分隔符（当使用TWO样式时）
     sep2: str = None
+    # 对话版本标识
     version: str = "Unknown"
 
+    # 是否跳过下一个消息
     skip_next: bool = False
 
     def get_prompt(self):
+        """
+        获取格式化后的对话提示文本
+        
+        返回:
+            str: 格式化后的完整对话文本
+        """
         if self.sep_style == SeparatorStyle.SINGLE:
             ret = self.system + self.sep
             for role, message in self.messages:
@@ -49,9 +69,25 @@ class Conversation:
             raise ValueError(f"Invalid style: {self.sep_style}")
 
     def append_message(self, role, message):
+        """
+        添加新消息到对话中
+        
+        参数:
+            role: 消息发送者角色
+            message: 消息内容
+        """
         self.messages.append([role, message])
 
     def get_images(self, return_pil=False):
+        """
+        从对话中提取图像
+        
+        参数:
+            return_pil: 是否返回PIL图像对象，默认为False返回base64编码的字符串
+            
+        返回:
+            list: 图像列表，根据return_pil参数返回PIL对象或base64编码的字符串
+        """
         images = []
         for i, (role, msg) in enumerate(self.messages[self.offset:]):
             if i % 2 == 0:
@@ -108,6 +144,12 @@ class Conversation:
         return images
 
     def to_gradio_chatbot(self):
+        """
+        转换为Gradio聊天机器人格式
+        
+        返回:
+            list: 适用于Gradio聊天界面的消息列表
+        """
         ret = []
         for i, (role, msg) in enumerate(self.messages[self.offset:]):
             if i % 2 == 0:
@@ -140,6 +182,12 @@ class Conversation:
         return ret
 
     def copy(self):
+        """
+        创建对话对象的深拷贝
+        
+        返回:
+            Conversation: 对话对象的副本
+        """
         return Conversation(
             system=self.system,
             roles=self.roles,
@@ -150,6 +198,12 @@ class Conversation:
             sep2=self.sep2)
 
     def dict(self):
+        """
+        将对话对象转换为字典表示
+        
+        返回:
+            dict: 包含对话所有属性的字典
+        """
         if len(self.get_images()) > 0:
             return {
                 "system": self.system,
@@ -169,6 +223,8 @@ class Conversation:
         }
 
 
+# 预定义的对话模板
+# v1对话模板
 conv_v1 = Conversation(
     system="A chat between a curious human and an artificial intelligence assistant. "
            "The assistant gives helpful, detailed, and polite answers to the human's questions.",
@@ -196,6 +252,7 @@ conv_v1 = Conversation(
     sep="###",
 )
 
+# v1.2对话模板
 conv_v1_2 = Conversation(
     system="A chat between a curious human and an artificial intelligence assistant. "
            "The assistant gives helpful, detailed, and polite answers to the human's questions.",
@@ -227,6 +284,7 @@ conv_v1_2 = Conversation(
     sep="###",
 )
 
+# Vicuna v1.1对话模板
 conv_vicuna_v1_1 = Conversation(
     system="A chat between a curious user and an artificial intelligence assistant. "
     "The assistant gives helpful, detailed, and polite answers to the user's questions.",
@@ -239,6 +297,7 @@ conv_vicuna_v1_1 = Conversation(
     sep2="</s>",
 )
 
+# BAIR v1对话模板
 conv_bair_v1 = Conversation(
     system="BEGINNING OF CONVERSATION:",
     roles=("USER", "GPT"),
@@ -249,6 +308,7 @@ conv_bair_v1 = Conversation(
     sep2="</s>",
 )
 
+# 简单对话模板
 simple_conv = Conversation(
     system="You are LLaVA, a large language model trained by UW Madison WAIV Lab, based on LLaMA architecture."
            "You are designed to assist human with a variety of tasks using natural language."
@@ -263,6 +323,7 @@ simple_conv = Conversation(
     sep="###",
 )
 
+# 简单多模态对话模板
 simple_conv_multimodal = Conversation(
     system="A chat between a curious user and an artificial intelligence assistant. "
     "The assistant gives helpful, detailed, and polite answers to the user's questions.",
@@ -274,6 +335,7 @@ simple_conv_multimodal = Conversation(
     sep="###",
 )
 
+# 简单传统对话模板
 simple_conv_legacy = Conversation(
     system="You are LLaVA, a large language model trained by UW Madison WAIV Lab."
            "You are designed to assist human with a variety of tasks using natural language."
@@ -288,6 +350,7 @@ simple_conv_legacy = Conversation(
     sep="###",
 )
 
+# LLAVA v1对话模板
 conv_llava_v1 = Conversation(
     system="You are LLaVA, a large language and vision assistant trained by UW Madison WAIV Lab."
            "You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language."
@@ -301,7 +364,10 @@ conv_llava_v1 = Conversation(
     sep2="</s>",
 )
 
+# 默认对话模板
 default_conversation = conv_v1_2
+
+# 所有可用的对话模板映射
 conv_templates = {
     "default": conv_v1_2,
     "simple": simple_conv,
@@ -317,4 +383,5 @@ conv_templates = {
 
 
 if __name__ == "__main__":
+    # 测试代码：打印默认对话提示
     print(default_conversation.get_prompt())

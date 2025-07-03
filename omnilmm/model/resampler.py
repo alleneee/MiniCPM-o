@@ -34,21 +34,39 @@ def get_abs_pos(abs_pos, tgt_size):
     返回:
         调整后的位置编码，形状为 (M, C)
     """
-    # abs_pos: L, C
-    # tgt_size: M
-    # return: M, C
+    # 步骤1：计算原始位置编码的空间尺寸
+    # 假设原始位置编码是二维展平的，通过开方得到边长
+    # 例如：如果abs_pos.size(0)=64，则src_size=8，表示8x8的网格
     src_size = int(math.sqrt(abs_pos.size(0)))
+    
+    # 步骤2：计算目标位置编码的空间尺寸
+    # 同样通过开方得到目标网格的边长
+    # 例如：如果tgt_size=576，则tgt_size=24，表示24x24的网格
     tgt_size = int(math.sqrt(tgt_size))
+    
+    # 步骤3：保存原始数据类型，用于最后的类型转换
     dtype = abs_pos.dtype
 
+    # 步骤4：判断是否需要调整尺寸
     if src_size != tgt_size:
+        # 步骤5：使用双三次插值调整位置编码尺寸
         return F.interpolate(
+            # 步骤5a：将一维展平的位置编码重塑为二维网格格式
+            # abs_pos形状从(L, C)变为(1, src_size, src_size, C)
+            # 其中1是batch维度，最后一维是特征维度
             abs_pos.float().reshape(1, src_size, src_size, -1).permute(0, 3, 1, 2),
+            # 步骤5b：设置目标尺寸为(tgt_size, tgt_size)
             size=(tgt_size, tgt_size),
+            # 步骤5c：使用双三次插值模式，提供更平滑的插值结果
             mode="bicubic",
+            # 步骤5d：不对齐角点，避免边界效应
             align_corners=False,
+        # 步骤5e：将插值后的结果重新排列维度并展平
+        # 从(1, C, tgt_size, tgt_size)变回(1, tgt_size, tgt_size, C)
+        # 然后展平为(tgt_size*tgt_size, C)格式
         ).permute(0, 2, 3, 1).flatten(0, 2).to(dtype=dtype)
     else:
+        # 步骤6：如果尺寸相同，直接返回原始位置编码
         return abs_pos
 
 
@@ -66,16 +84,47 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
         pos_embed: 形状为[grid_size*grid_size, embed_dim]的位置编码
                   如果cls_token为True，则形状为[1+grid_size*grid_size, embed_dim]
     """
+    # 步骤1：创建网格坐标
+    # 生成高度方向的坐标序列，从0到grid_size-1
+    # 例如：如果grid_size=8，则grid_h=[0, 1, 2, 3, 4, 5, 6, 7]
     grid_h = np.arange(grid_size, dtype=np.float32)
+    
+    # 生成宽度方向的坐标序列，从0到grid_size-1
+    # 例如：如果grid_size=8，则grid_w=[0, 1, 2, 3, 4, 5, 6, 7]
     grid_w = np.arange(grid_size, dtype=np.float32)
+    
+    # 步骤2：创建二维网格坐标矩阵
+    # 使用meshgrid创建坐标网格，注意这里w（宽度）在前，h（高度）在后
+    # 这样做是为了符合图像处理中的坐标约定（x轴对应宽度，y轴对应高度）
+    # 返回两个矩阵：第一个是x坐标矩阵，第二个是y坐标矩阵
     grid = np.meshgrid(grid_w, grid_h)  # 注意w先行
+    
+    # 步骤3：堆叠坐标矩阵
+    # 将x坐标矩阵和y坐标矩阵沿着新的轴（axis=0）堆叠
+    # 结果形状为(2, grid_size, grid_size)
+    # 其中第0维表示坐标类型（0为x坐标，1为y坐标）
     grid = np.stack(grid, axis=0)
 
+    # 步骤4：重塑网格形状以适配后续处理
+    # 将形状从(2, grid_size, grid_size)重塑为(2, 1, grid_size, grid_size)
+    # 添加的维度1是为了与后续函数的输入格式保持一致
+    # 这种格式便于批量处理多个网格
     grid = grid.reshape([2, 1, grid_size, grid_size])
+    
+    # 步骤5：生成位置编码
+    # 调用专门的函数从网格坐标生成二维正弦余弦位置编码
+    # 返回形状为(grid_size*grid_size, embed_dim)的位置编码矩阵
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+    
+    # 步骤6：处理类别标记（可选）
     if cls_token:
+        # 如果需要包含类别标记，在位置编码前面添加一个全零向量
+        # 这个全零向量作为类别标记的位置编码
+        # 最终形状变为(1+grid_size*grid_size, embed_dim)
         pos_embed = np.concatenate(
             [np.zeros([1, embed_dim]), pos_embed], axis=0)
+    
+    # 步骤7：返回最终的位置编码
     return pos_embed
 
 
@@ -205,6 +254,8 @@ class Resampler(nn.Module):
     def forward(self, x, attn_mask=None):
         """
         前向传播
+        功能: 通过双线性插值将固定的8×8位置编码调整到匹配实际输入大小
+             支持任意分辨率图像，无论是224×224还是1344×1344都能正确处理
         
         参数:
             x: 输入特征
@@ -217,18 +268,22 @@ class Resampler(nn.Module):
         pos_embed = get_abs_pos(self.pos_embed, x.size(1))
 
         # 投影和归一化
-        x = self.kv_proj(x)
-        x = self.ln_kv(x).permute(1, 0, 2)
+        x = self.kv_proj(x) # 确保维度匹配
+        x = self.ln_kv(x).permute(1, 0, 2) # Key/Value 归一化
 
+        # 维度对齐投影
         N = x.shape[1]
+         # 归一化+维度变换
         q = self.ln_q(self.query)
         
         # 执行注意力计算
+        # 4. 交叉注意力 - 核心机制 ⭐
+    
         out = self.attn(
-            self._repeat(q, N) + self.pos_embed.unsqueeze(1),
-            x + pos_embed.unsqueeze(1),
-            x,
-            attn_mask=attn_mask)[0]
+            self._repeat(q, N) + self.pos_embed.unsqueeze(1), # Query: 查询 + 位置编码
+            x + pos_embed.unsqueeze(1),  # Key: 视觉特征 + 位置编码  
+            x,  # Value: 视觉特征
+            attn_mask=attn_mask)[0] 
         x = out.permute(1, 0, 2)
 
         # 最终处理

@@ -157,6 +157,17 @@ class OmniLMMModel(MistralModel):
             vision_tower, resampler = create_vision_module(config)
 
             # HACK: 为FSDP（Fully Sharded Data Parallel）兼容性处理
+            """
+             FSDP 是 PyTorch 中的一种分布式训练技术，全称为"完全分片数据并行"。
+             它是对传统数据并行（DDP, DistributedDataParallel）的优化升级版本。
+
+            # 在代码中的用途：
+            # 内存优化：FSDP 将模型参数、梯度和优化器状态分片到多个 GPU 上，每个 GPU 只存储一部分模型，大大减少了单 GPU 的内存占用。这对训练大型模型（如 MiniCPM-O 这样的多模态模型）非常重要。
+            # 结构要求：注释中提到 FSDP要求模型参数以特定方式组织，这是因为 FSDP 对模型结构有特定要求，需要能够正确地对模型进行分片。
+            # 代码实现：在这段代码中，将 vision_tower 包装为列表 self.vision_tower = [vision_tower] 就是为了满足 FSDP 的这种特定要求。
+            # 微调兼容性：代码后续判断是否微调 CLIP 模型，如果微调则将 vision_tower 从列表中取出来使用原始对象，以便进行梯度更新；否则保持列表形式，用于冻结参数的推理模式。
+            # FSDP 在大型多模态模型训练中特别有用，因为这类模型通常包含上亿甚至更多参数，传统训练方法很容易遇到 GPU 内存不足的问题。
+            """
             # FSDP要求模型参数以特定方式组织，这里将vision_tower包装为列表
             self.vision_tower = [vision_tower]
             self.resampler = resampler
